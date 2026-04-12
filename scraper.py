@@ -9,7 +9,7 @@ class Scraper:
         self.target_date = target_date
         self.target_datetime = pd.to_datetime(target_date, format='%Y%m%d')
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "Mozilla/5.0"})
+        self.session.headers.update({"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
 
     def fetch_article_text(self, link):
         if 'article_id=' in link and 'office_id=' in link:
@@ -17,17 +17,25 @@ class Scraper:
                 article_id = link.split('&')[0].split('article_id=')[-1]
                 office_id = link.split('&')[1].split('office_id=')[-1]
                 url = f'https://n.news.naver.com/mnews/article/{office_id}/{article_id}'
-                res = self.session.get(url, timeout=5)
-                b = bs(res.content, 'html.parser')
+                res = self.session.get(url, timeout=3)
+                if not res.ok: return ''
+                b = bs(res.content, 'lxml') 
                 news_text = b.find('article', {'id': 'dic_area'})
-                return news_text.get_text().strip() if news_text else ''
+                text = news_text.get_text().strip() if news_text else ''
+                b.decompose() # 메모리 낭비 방지를 위한 즉시 청소
+                return text
             except:
                 return ''
         return ''
 
     def get_new_page(self, news_url):
-        A = self.session.get(news_url)
-        soup = bs(A.content, 'html.parser')
+        try:
+            A = self.session.get(news_url, timeout=3)
+            if not A.ok: return pd.DataFrame()
+        except:
+            return pd.DataFrame()
+            
+        soup = bs(A.content, 'lxml')
         news_list = soup.select('dd[class=articleSubject]')
         
         articles = []
@@ -38,9 +46,13 @@ class Scraper:
             link = a_tag.attrs.get('href', '')
             articles.append({'title': title, 'link': link})
             
+        soup.decompose() # 메모리 즉시 청소
+        
+        # 과부하 방지를 위해 카테고리당 최신 10개만 추출
+        articles = articles[:10]
         text_list = [''] * len(articles)
         
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             future_to_idx = {executor.submit(self.fetch_article_text, a['link']): i for i, a in enumerate(articles)}
             for future in as_completed(future_to_idx):
                 idx = future_to_idx[future]
@@ -51,28 +63,23 @@ class Scraper:
     def get_news(self):
         news_all_list = []
         for j in [401, 402, 403, 404, 406, 429]:
-            page_urls = [f"https://finance.naver.com/news/news_list.naver?mode=LSS3D&section_id=101&section_id2=258&section_id3={j}&date={self.target_date}"]
-            for i in range(2, 4): 
-                page_urls.append(f"https://finance.naver.com/news/news_list.naver?mode=LSS3D&section_id=101&section_id2=258&section_id3={j}&date={self.target_date}&page={i}")
-            
-            for url in page_urls:
-                try:
-                    news_temp = self.get_new_page(url)
-                    if not news_temp.empty:
-                        news_temp['category'] = j
-                        news_temp['date'] = self.target_datetime.strftime('%Y-%m-%d')
-                        news_all_list.append(news_temp)
-                except:
-                    pass
+            # 서버 무리를 방지하기 위해 1페이지만 실시간 수집
+            url = f"https://finance.naver.com/news/news_list.naver?mode=LSS3D&section_id=101&section_id2=258&section_id3={j}&date={self.target_date}"
+            news_temp = self.get_new_page(url)
+            if not news_temp.empty:
+                news_temp['category'] = j
+                news_temp['date'] = self.target_datetime.strftime('%Y-%m-%d')
+                news_all_list.append(news_temp)
                     
         return pd.concat(news_all_list, ignore_index=True) if news_all_list else pd.DataFrame()
 
     def get_reports(self, url_name, report_type):
         answer = []
-        for num in range(1, 3):
+        for num in range(1, 2):
             try:
-                A = self.session.get(f"https://finance.naver.com/research/{url_name}.naver?&page={num}", timeout=5)
-                soup = bs(A.text, 'html.parser')
+                A = self.session.get(f"https://finance.naver.com/research/{url_name}.naver?&page={num}", timeout=3)
+                if not A.ok: continue
+                soup = bs(A.text, 'lxml')
                 rows = soup.find_all('tr')
                 urls_to_fetch = []
                 for row in rows:
@@ -88,19 +95,26 @@ class Scraper:
                         url = 'https://finance.naver.com/research/' + href
                         urls_to_fetch.append({'title': title, 'date': day, 'url': url})
                         
+                soup.decompose()
+                
+                urls_to_fetch = urls_to_fetch[:5] # 최신 리포트 5개로 제한
+                
                 def fetch_report_text(url):
                     try:
-                        res = self.session.get(url, timeout=5)
-                        sub_soup = bs(res.text, 'html.parser')
+                        res = self.session.get(url, timeout=3)
+                        sub_soup = bs(res.text, 'lxml')
                         table = sub_soup.find_all('table')
+                        text = ''
                         if table:
                             lows = table[0].find_all('p')
-                            return pd.Series([i.text for i in lows]).astype(str).sum()
+                            text = pd.Series([i.text for i in lows]).astype(str).sum()
+                        sub_soup.decompose()
+                        return text
                     except:
                         pass
                     return ''
                     
-                with ThreadPoolExecutor(max_workers=5) as executor:
+                with ThreadPoolExecutor(max_workers=2) as executor:
                     futures = {executor.submit(fetch_report_text, item['url']): item for item in urls_to_fetch}
                     for future in as_completed(futures):
                         item = futures[future]
