@@ -18,11 +18,12 @@ class Scraper:
                 office_id = link.split('&')[1].split('office_id=')[-1]
                 url = f'https://n.news.naver.com/mnews/article/{office_id}/{article_id}'
                 res = self.session.get(url, timeout=3)
+                res.encoding = 'utf-8' # 본문: 최신 한글 인코딩 강제 지정
                 if not res.ok: return ''
-                b = bs(res.content, 'lxml') 
+                b = bs(res.text, 'lxml') 
                 news_text = b.find('article', {'id': 'dic_area'})
                 text = news_text.get_text().strip() if news_text else ''
-                b.decompose() # 메모리 낭비 방지를 위한 즉시 청소
+                b.decompose() 
                 return text
             except:
                 return ''
@@ -31,11 +32,12 @@ class Scraper:
     def get_new_page(self, news_url):
         try:
             A = self.session.get(news_url, timeout=3)
+            A.encoding = 'euc-kr' # 목차: 옛날 한글 인코딩 강제 지정 (글씨 깨짐 방지)
             if not A.ok: return pd.DataFrame()
         except:
             return pd.DataFrame()
             
-        soup = bs(A.content, 'lxml')
+        soup = bs(A.text, 'lxml')
         news_list = soup.select('dd[class=articleSubject]')
         
         articles = []
@@ -46,9 +48,7 @@ class Scraper:
             link = a_tag.attrs.get('href', '')
             articles.append({'title': title, 'link': link})
             
-        soup.decompose() # 메모리 즉시 청소
-        
-        # 과부하 방지를 위해 카테고리당 최신 10개만 추출
+        soup.decompose() 
         articles = articles[:10]
         text_list = [''] * len(articles)
         
@@ -63,7 +63,6 @@ class Scraper:
     def get_news(self):
         news_all_list = []
         for j in [401, 402, 403, 404, 406, 429]:
-            # 서버 무리를 방지하기 위해 1페이지만 실시간 수집
             url = f"https://finance.naver.com/news/news_list.naver?mode=LSS3D&section_id=101&section_id2=258&section_id3={j}&date={self.target_date}"
             news_temp = self.get_new_page(url)
             if not news_temp.empty:
@@ -78,6 +77,7 @@ class Scraper:
         for num in range(1, 2):
             try:
                 A = self.session.get(f"https://finance.naver.com/research/{url_name}.naver?&page={num}", timeout=3)
+                A.encoding = 'euc-kr' # 옛날 한글 인코딩 강제 지정
                 if not A.ok: continue
                 soup = bs(A.text, 'lxml')
                 rows = soup.find_all('tr')
@@ -96,12 +96,12 @@ class Scraper:
                         urls_to_fetch.append({'title': title, 'date': day, 'url': url})
                         
                 soup.decompose()
-                
-                urls_to_fetch = urls_to_fetch[:5] # 최신 리포트 5개로 제한
+                urls_to_fetch = urls_to_fetch[:5] 
                 
                 def fetch_report_text(url):
                     try:
                         res = self.session.get(url, timeout=3)
+                        res.encoding = 'euc-kr' # 옛날 한글 인코딩 강제 지정
                         sub_soup = bs(res.text, 'lxml')
                         table = sub_soup.find_all('table')
                         text = ''
