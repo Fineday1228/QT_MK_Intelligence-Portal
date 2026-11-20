@@ -39,7 +39,7 @@ class Scraper:
 
     def get_new_page(self, sid):
         try:
-            url = f"https://stock.naver.com/api/domestic/news/focus?sid={sid}&page=1&pageSize=30&date={self.target_date}"
+            url = f"https://stock.naver.com/api/domestic/news/focus?sid={sid}&page=1&pageSize=20&date={self.target_date}"
             res = self.session.get(url, timeout=5)
             if not res.ok: return pd.DataFrame()
             articles = res.json().get('articles', [])
